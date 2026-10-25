@@ -77,7 +77,8 @@ class PassPipeline:
         # A traced lambda is named jit_<lambda>, and <> are illegal in Windows
         # filenames. Sanitize rather than crash on a perfectly valid module.
         safe = "".join(c if (c.isalnum() or c in "._-") else "_" for c in module.name)
-        path = os.path.join(self.dump_dir, f"{safe}.{index:04d}.{label}.txt")
+        prefix = f"module_{getattr(module, 'seq', 0):04d}.{safe}"
+        path = os.path.join(self.dump_dir, f"{prefix}.{index:04d}.{label}.txt")
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(print_module(module, metadata=True))
 
@@ -107,6 +108,31 @@ class PassPipeline:
             lines.append(f"{name:<28}{count:>8}{delta:>8}{mark}")
             prev = count
         return "\n".join(lines)
+
+# in_specs and out_specs are the only constraints on the spmd pass
+# These are set by the user and the shardings are simply propogated in a pass
+# through the entire program
+def spmd_pipeline(mesh, in_specs=None, out_spec=None,
+                  dump_dir: str | None = None) -> PassPipeline:
+    """The full stage-3 pipeline, in XLA's order (gpu_compiler.cc:1903-1990).
+
+    SPMD FIRST, so every later pass sees per-device shapes with the collectives
+    already present. Simplification is the stage-2 cluster. Collective
+    optimization runs after it, matching 1935.
+    """
+    from .collectives import ReduceScatterCreator
+    from .simplify import CSE, DCE, AlgebraicSimplifier, ConstantFolding
+    from .spmd import ShardingPropagation, SpmdPartitioner
+
+    pipe = PassPipeline("spmd_optimizations", dump_dir)
+    pipe.add(ShardingPropagation(mesh, in_specs))          # 1911
+    pipe.add(SpmdPartitioner(mesh, out_spec))              # 1911
+    # Then we add the standard Fixpoint
+    pipe.add(Fixpoint([AlgebraicSimplifier(), ConstantFolding(), CSE(), DCE()],
+                      name="simplification"))               # 1928
+    pipe.add(ReduceScatterCreator())                        # 1935
+    pipe.add(DCE())
+    return pipe
 
 
 def default_pipeline(dump_dir: str | None = None) -> PassPipeline:

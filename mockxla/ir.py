@@ -32,6 +32,10 @@ class Instruction:
     # NOT part of structural identity: two instructions from different source
     # lines that compute the same thing ARE redundant, so CSE must ignore this.
     metadata: OpMetadata | None = None
+    # Stage 3. ShardingPropagation fills these in; SpmdPartitioner reads them.
+    # Mirrors XLA, where HloSharding is an attribute ON the instruction.
+    dist: object | None = None            # a sharding.Dist
+    global_shape: Shape | None = None     # shape BEFORE partitioning
 
     def __repr__(self):
         return f"{self.id} = {self.shape} {self.opcode}({', '.join(self.operands)})"
@@ -44,7 +48,8 @@ class Computation:
         self.name = name
         self.instructions: dict[str, Instruction] = {}   # insertion-ordered, map of instruction id to Instruction object involved in this computation
         self.params: list[str] = []                      # parameter ids, in order
-        self.root: str | None = None 
+        self.root: str | None = None
+        self._next = 0 
 
     # -- construction ------------------------------------------------------
 
@@ -55,7 +60,13 @@ class Computation:
         bottom. Real XLA does the same (%add.3, %fusion.12 come from a
         module-wide unique-name counter).
         """
-        return f"%{opcode}.{len(self.instructions)}"
+        # Monotonic, NOT len(self.instructions): after a pass deletes a node the
+        # length goes back down and ids start colliding (%all-gather.21 and
+        # %reduce-scatter.21 both appeared in one module).
+        self._next = max(self._next, len(self.instructions))
+        n = self._next
+        self._next += 1
+        return f"%{opcode}.{n}"
 
     # Add computation 
     def add(self, opcode: str, operands: list[str], shape: Shape,
@@ -130,11 +141,20 @@ class Computation:
 
 
 # What is the purpose of the Module class?
+#: Global module counter. Real XLA names dumps module_0000.jit_f.<pass>.txt for
+#: the same reason: one process can compile the SAME function several times (two
+#: parallelism configs, two input shapes), and without a sequence number the
+#: later compile silently overwrites the earlier one's dumps.
+_MODULE_SEQ = [0]
+
+
 class Module:
     """A Computation plus whatever sub-computations it refers to."""
 
     def __init__(self, name: str):
         self.name = name
+        self.seq = _MODULE_SEQ[0]
+        _MODULE_SEQ[0] += 1
         self.entry = Computation("main")
 
     def validate(self) -> None:

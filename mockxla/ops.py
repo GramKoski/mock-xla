@@ -243,3 +243,46 @@ register("dot_general", _dot_shape, _dot_impl)
 register("compare", _compare_shape, _compare_impl)
 register("select", _select_shape, lambda p, t, f, **kw: np.where(p, t, f))
 register("convert", _convert_shape, lambda x, *, dtype, **kw: x.astype(dtype.np))
+
+
+# ---------------------------------------------------------------- collectives
+#
+# Stage 3. Their `impl` is None because a collective cannot be evaluated from
+# one device's arrays alone -- the SPMD interpreter special-cases them, the way
+# the interpreter already special-cases `parameter`.
+#
+# `replica_groups` is the only place the mesh axis survives into the IR. Axis
+# NAMES do not exist in HLO; the partitioner flattens them to device-id groups,
+# so group size and stride are all you have to recover which axis a collective
+# is on. (We also keep an `axis` attr purely so dumps stay readable -- real HLO
+# has no such luxury.)
+
+
+def _all_gather_shape(operand, *, dimensions, group_size, **_):
+    d = dimensions[0]
+    dims = list(operand.dims)
+    dims[d] *= group_size
+    return Shape(tuple(dims), operand.dtype)
+
+
+def _reduce_scatter_shape(operand, *, dimensions, group_size, **_):
+    d = dimensions[0]
+    dims = list(operand.dims)
+    if dims[d] % group_size:
+        raise TypeError(f"reduce-scatter: dim {d}={dims[d]} not divisible by {group_size}")
+    dims[d] //= group_size
+    return Shape(tuple(dims), operand.dtype)
+
+
+def _dynamic_slice_shape(operand, *, dimensions, group_size, **_):
+    return _reduce_scatter_shape(operand, dimensions=dimensions, group_size=group_size)
+
+
+register("all-reduce", _same, None)
+register("all-gather", _all_gather_shape, None)
+register("reduce-scatter", _reduce_scatter_shape, None)
+# A simplification: real dynamic-slice takes its offsets as OPERANDS (that is
+# what makes it dynamic). Here the offset is implied by the device's coordinate
+# on `axis`, which is the only form the partitioner ever emits. Keeping the name
+# matters because ReduceScatterCreator pattern-matches on it.
+register("dynamic-slice", _dynamic_slice_shape, None)

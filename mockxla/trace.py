@@ -156,7 +156,12 @@ class Executable:
         from .printer import print_module
         return print_module(self.module, metadata)
 
+    mesh = None              # set by Lowered.partition()
+
     def __call__(self, *args):
+        if self.mesh is not None:
+            from .spmd_interp import execute_spmd
+            return execute_spmd(self.module, self.mesh, *args)
         from .interp import execute
         return execute(self.module, *args)
 
@@ -171,6 +176,18 @@ class Lowered:
     def as_text(self, metadata: bool = False) -> str:
         from .printer import print_module
         return print_module(self.module, metadata)
+
+    def partition(self, mesh, in_specs=None, out_spec=None,
+                  dump_dir: str | None = None) -> "Executable":
+        """Stage 3: partition for `mesh`, then optimize. Returns an Executable
+        whose __call__ runs the simulated multi-device interpreter."""
+        from .passes import spmd_pipeline
+        pipe = spmd_pipeline(mesh, in_specs, out_spec, dump_dir)
+        pipe.run(self.module)
+        exe = Executable(self.module, self.param_shapes)
+        exe.pipeline = pipe
+        exe.mesh = mesh
+        return exe
 
     def compile(self, optimize: bool = True,
                 dump_dir: str | None = None) -> Executable:
