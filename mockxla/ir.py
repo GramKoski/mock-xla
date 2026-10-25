@@ -116,8 +116,10 @@ class Computation:
         """Execution order. Insertion order from tracing is already topological."""
         return list(self.instructions.values())
 
-    # What does this function do?
-    # I guess given an iid, it returns a list of intructions that use the output of this instruction
+    def comp_root_opcode(self) -> str:
+        """Opcode of the root. Selects kInput vs kLoop for a fused computation."""
+        return self.instructions[self.root].opcode if self.root else ""
+
     def users(self, iid: str) -> list[Instruction]:
         """Computed on demand. XLA maintains an index; at this scale we don't."""
         return [i for i in self.instructions.values() if iid in i.operands]
@@ -156,6 +158,11 @@ class Module:
         self.seq = _MODULE_SEQ[0]
         _MODULE_SEQ[0] += 1
         self.entry = Computation("main")
+        #: Sub-computations. THIS is what Module was always for -- in stage 1 it
+        #: held one thing and I said so. Stage 4 fills it: every fusion node
+        #: owns a fused computation here, exactly as HloModule owns the
+        #: computations behind kFusion / while / conditional / reduce.
+        self.computations: dict[str, Computation] = {}
 
     def validate(self) -> None:
         self.entry.validate()

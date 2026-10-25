@@ -33,9 +33,18 @@ def execute(module: Module, *args, trace: bool = False) -> np.ndarray:
                 raise TypeError(f"{instr.id}: expected {want}, got shape {arr.shape}")
             env[instr.id] = arr.astype(want.dtype.np, copy=False)
         else:
-            op = lookup(instr.opcode)
-            inputs = [env[o] for o in instr.operands]
-            out = op.impl(*inputs, **instr.attrs)
+            if instr.opcode == "fusion":
+                # Correctness only: the body runs with intermediates
+                # materialized. Fusion's BENEFIT is measured analytically by
+                # cost.py, which counts only the fusion's boundary bytes -- so
+                # performance and correctness stay measured by two separate
+                # mechanisms, exactly as in stage 1.
+                out = execute_fusion(module, instr,
+                                     [env[o] for o in instr.operands])
+            else:
+                op = lookup(instr.opcode)
+                inputs = [env[o] for o in instr.operands]
+                out = op.impl(*inputs, **instr.attrs)
             out = np.asarray(out)
             if out.shape != instr.shape.dims:
                 raise AssertionError(
@@ -70,3 +79,16 @@ def peak_live_bytes(module: Module) -> int:
         peak = max(peak, sum(comp[b].shape.size_bytes for b in live))
         live = {b for b in live if last_use.get(b, -1) > i}
     return peak
+
+
+def execute_fusion(module: Module, instr, operands: list[np.ndarray]) -> np.ndarray:
+    """Run a fusion's body. Parameters map positionally to the fusion's operands."""
+    body = module.computations[instr.attrs["computation"]]
+    env: dict[str, np.ndarray] = {}
+    for i in body.order():
+        if i.opcode == "parameter":
+            env[i.id] = operands[i.attrs["index"]]
+        else:
+            env[i.id] = np.asarray(
+                lookup(i.opcode).impl(*[env[o] for o in i.operands], **i.attrs))
+    return env[body.root]

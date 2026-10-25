@@ -286,3 +286,23 @@ register("reduce-scatter", _reduce_scatter_shape, None)
 # on `axis`, which is the only form the partitioner ever emits. Keeping the name
 # matters because ReduceScatterCreator pattern-matches on it.
 register("dynamic-slice", _dynamic_slice_shape, None)
+
+
+# ---------------------------------------------------------------- fusion
+#
+# A `fusion` instruction wraps a whole Computation, held in module.computations.
+# Its operands are the fusion's EXTERNAL inputs; the fused computation's
+# parameters correspond to them positionally. Intermediates inside the body
+# never appear as operands and never touch memory -- which is the entire point,
+# and is exactly what cost.bytes_accessed() measures.
+#
+# impl is None: evaluating a fusion needs the module (to find the body), which
+# the per-op impl signature does not carry. The interpreters special-case it,
+# the way they already special-case `parameter` and the collectives.
+
+
+def _fusion_shape(*operand_shapes, out_shape, **_):
+    return out_shape
+
+
+register("fusion", _fusion_shape, None)

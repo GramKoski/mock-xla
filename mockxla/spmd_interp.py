@@ -136,6 +136,11 @@ def execute_spmd(module: Module, mesh: Mesh, *global_args,
             continue
         if instr.opcode in COLLECTIVES:
             _run_collective(instr, envs, mesh)
+        elif instr.opcode == "fusion":
+            from .interp import execute_fusion
+            for env in envs:
+                env[instr.id] = execute_fusion(
+                    module, instr, [env[o] for o in instr.operands])
         else:
             op = lookup(instr.opcode)
             for env in envs:

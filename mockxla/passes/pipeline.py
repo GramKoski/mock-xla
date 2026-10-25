@@ -113,7 +113,8 @@ class PassPipeline:
 # These are set by the user and the shardings are simply propogated in a pass
 # through the entire program
 def spmd_pipeline(mesh, in_specs=None, out_spec=None,
-                  dump_dir: str | None = None) -> PassPipeline:
+                  dump_dir: str | None = None, fuse: bool = True,
+                  device=None) -> PassPipeline:
     """The full stage-3 pipeline, in XLA's order (gpu_compiler.cc:1903-1990).
 
     SPMD FIRST, so every later pass sees per-device shapes with the collectives
@@ -132,10 +133,15 @@ def spmd_pipeline(mesh, in_specs=None, out_spec=None,
                       name="simplification"))               # 1928
     pipe.add(ReduceScatterCreator())                        # 1935
     pipe.add(DCE())
+    if fuse:
+        from .fusion import PriorityFusion
+        pipe.add(PriorityFusion(device))                    # 1970
+        pipe.add(DCE())
     return pipe
 
 
-def default_pipeline(dump_dir: str | None = None) -> PassPipeline:
+def default_pipeline(dump_dir: str | None = None, fuse: bool = True,
+                     device=None) -> PassPipeline:
     """The stage-2 pipeline. Ordering mirrors XLA's RunOptimizationPasses:
     simplify, then clean up, repeatedly, then a final DCE."""
     from .simplify import CSE, DCE, AlgebraicSimplifier, ConstantFolding
@@ -144,4 +150,8 @@ def default_pipeline(dump_dir: str | None = None) -> PassPipeline:
     pipe.add(Fixpoint([AlgebraicSimplifier(), ConstantFolding(), CSE(), DCE()],
                       name="simplification"))
     pipe.add(DCE())
+    if fuse:
+        from .fusion import PriorityFusion
+        pipe.add(PriorityFusion(device))                    # XLA: 1970
+        pipe.add(DCE())
     return pipe

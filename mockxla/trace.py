@@ -178,11 +178,12 @@ class Lowered:
         return print_module(self.module, metadata)
 
     def partition(self, mesh, in_specs=None, out_spec=None,
-                  dump_dir: str | None = None) -> "Executable":
+                  dump_dir: str | None = None, fuse: bool = True,
+                  device=None) -> "Executable":
         """Stage 3: partition for `mesh`, then optimize. Returns an Executable
         whose __call__ runs the simulated multi-device interpreter."""
         from .passes import spmd_pipeline
-        pipe = spmd_pipeline(mesh, in_specs, out_spec, dump_dir)
+        pipe = spmd_pipeline(mesh, in_specs, out_spec, dump_dir, fuse, device)
         pipe.run(self.module)
         exe = Executable(self.module, self.param_shapes)
         exe.pipeline = pipe
@@ -190,13 +191,14 @@ class Lowered:
         return exe
 
     def compile(self, optimize: bool = True,
-                dump_dir: str | None = None) -> Executable:
+                dump_dir: str | None = None, fuse: bool = True,
+                device=None) -> Executable:
         """Run the pass pipeline. `optimize=False` keeps the raw trace, which is
         what the demos diff against to prove optimization is semantics-preserving."""
         if not optimize:
             return Executable(self.module, self.param_shapes)
         from .passes import default_pipeline
-        pipe = default_pipeline(dump_dir)
+        pipe = default_pipeline(dump_dir, fuse, device)
         pipe.run(self.module)
         exe = Executable(self.module, self.param_shapes)
         exe.pipeline = pipe
